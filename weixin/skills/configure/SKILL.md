@@ -10,67 +10,52 @@ allowed-tools:
 
 # WeChat Channel Configuration
 
-You are configuring the WeChat (Weixin) channel plugin for Claude Code.
+IMPORTANT: Follow these steps EXACTLY. Do NOT improvise with curl, python, or other methods.
 
-## Login Flow
+## Step 1: Get QR code
 
-Follow these steps EXACTLY in order. Do NOT skip steps or combine them.
-
-### Step 1: Get QR code
+Run this EXACT command (do not modify it):
 
 ```bash
-bun ${CLAUDE_SKILL_DIR}/../../bin/login.ts get-qr
+cd ${CLAUDE_SKILL_DIR}/../.. && bun bin/login.ts get-qr
 ```
 
-This outputs JSON with `qrcodeId` and `qrFile`. Save the `qrcodeId` for step 3.
+Parse the JSON output to get `qrcodeId` and `qrFile`.
 
-### Step 2: Display QR code
+## Step 2: Display QR code in your response
 
-Read the QR code file with the Read tool:
+Use the Read tool to read the file path from `qrFile` (should be `/tmp/weixin-qr.txt`).
 
-```
-Read /tmp/weixin-qr.txt
-```
+Then include the ENTIRE file contents in your text response inside a code block. This is how the user will see and scan the QR code — it MUST be in your text response, NOT inside a Bash call.
 
-Then display the QR code contents directly in your text response inside a code block, like:
-
+Example format:
 ````
 请使用微信扫描以下二维码:
 
 ```
-<paste the exact contents of /tmp/weixin-qr.txt here>
+▄▄▄▄▄▄▄...
+█ ▄▄▄ █...
+(full QR code here)
 ```
 
-扫描后请在手机上确认连接。
+扫码后请在手机上确认。
 ````
 
-This is critical — the QR code MUST appear in your text response (not inside a Bash tool call) so the user can see and scan it without it being collapsed.
+## Step 3: Poll for confirmation
 
-### Step 3: Poll for confirmation
-
-Run the poll command with the `qrcodeId` from step 1. Set a 5-minute timeout:
+Run this EXACT command (replace QRCODE_ID with the actual qrcodeId from step 1):
 
 ```bash
-bun ${CLAUDE_SKILL_DIR}/../../bin/login.ts poll <qrcodeId>
+cd ${CLAUDE_SKILL_DIR}/../.. && bun bin/login.ts poll QRCODE_ID
 ```
 
-This command blocks until the user confirms, the QR expires, or timeout. It outputs JSON status lines.
+This blocks for up to 5 minutes. Handle the result:
 
-Interpret the final output:
-- `{"status":"confirmed","accountId":"...","userId":"..."}` → Success! Tell the user: "连接成功！请重启 Claude Code。"
-- `{"status":"expired"}` → QR expired. Go back to Step 1 to get a new QR code. Max 3 retries.
-- `{"status":"timeout"}` → Tell the user to re-run `/weixin:configure`.
-- `{"status":"scaned"}` → User scanned but hasn't confirmed yet. This is an intermediate status, the command continues polling.
+- Output contains `"confirmed"` → Login successful! Tell user to restart Claude Code.
+- Output contains `"expired"` → Go back to Step 1 (max 3 retries).
+- Output contains `"timeout"` → Tell user to retry `/weixin:configure`.
+- Output contains `"scaned"` lines followed by `"confirmed"` → Same as confirmed.
 
-### Step 4: Confirm success
+## Status Check (when user asks about status, not login)
 
-After confirmed status, tell the user:
-- 连接成功
-- 账号 ID 和用户 ID (from the confirmed output)
-- 下一步: 重启 Claude Code 以启动消息轮询
-
-## Status Check
-
-When the user asks about status (not login):
-- Read `~/.claude/channels/weixin/account.json` — show if logged in, account ID
-- Read `~/.claude/channels/weixin/access.json` — show DM policy, allowed users count
+Read `~/.claude/channels/weixin/account.json` and `~/.claude/channels/weixin/access.json` to show current state.
