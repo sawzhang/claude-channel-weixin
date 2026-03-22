@@ -322,8 +322,76 @@ function aesEcbEncrypt(data: Buffer, key: Buffer): Buffer {
   return Buffer.concat([cipher.update(data), cipher.final()])
 }
 
+function aesEcbDecrypt(data: Buffer, key: Buffer): Buffer {
+  const decipher = require('crypto').createDecipheriv('aes-128-ecb', key, null)
+  return Buffer.concat([decipher.update(data), decipher.final()])
+}
+
 function aesEcbPaddedSize(rawSize: number): number {
   return Math.ceil((rawSize + 1) / 16) * 16
+}
+
+function parseAesKey(aesKeyBase64: string): Buffer {
+  const decoded = Buffer.from(aesKeyBase64, 'base64')
+  // Images: base64(raw 16 bytes) → 16 bytes directly
+  if (decoded.length === 16) return decoded
+  // Voice/File/Video: base64(hex string) → 32 ASCII hex chars → 16 bytes
+  if (decoded.length === 32) {
+    const hex = decoded.toString('ascii')
+    if (/^[0-9a-fA-F]{32}$/.test(hex)) return Buffer.from(hex, 'hex')
+  }
+  return decoded
+}
+
+// ── CDN constants ────────────────────────────────────────────────────────────
+
+const CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
+const INBOX_DIR = join(STATE_DIR, 'inbox')
+
+// ── CDN download ─────────────────────────────────────────────────────────────
+
+async function downloadFromCdn(encryptQueryParam: string, aesKeyBase64: string): Promise<Buffer> {
+  const url = `${CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`CDN download failed: ${res.status}`)
+  const encrypted = Buffer.from(await res.arrayBuffer())
+  const key = parseAesKey(aesKeyBase64)
+  return aesEcbDecrypt(encrypted, key)
+}
+
+async function downloadInboundImage(imageItem: MessageItem['image_item']): Promise<string | undefined> {
+  if (!imageItem?.media?.encrypt_query_param) return undefined
+  const aesKey = imageItem.aeskey
+    ? Buffer.from(imageItem.aeskey, 'hex').toString('base64')
+    : imageItem.media.aes_key
+  if (!aesKey) return undefined
+
+  try {
+    const buf = await downloadFromCdn(imageItem.media.encrypt_query_param, aesKey)
+    mkdirSync(INBOX_DIR, { recursive: true })
+    const path = join(INBOX_DIR, `${Date.now()}-${randomBytes(4).toString('hex')}.jpg`)
+    writeFileSync(path, buf)
+    return path
+  } catch (err) {
+    log('ERROR', `image download failed: ${String(err)}`)
+    return undefined
+  }
+}
+
+async function downloadInboundFile(fileItem: MessageItem['file_item']): Promise<string | undefined> {
+  if (!fileItem?.media?.encrypt_query_param || !fileItem.media.aes_key) return undefined
+
+  try {
+    const buf = await downloadFromCdn(fileItem.media.encrypt_query_param, fileItem.media.aes_key)
+    mkdirSync(INBOX_DIR, { recursive: true })
+    const name = fileItem.file_name || `file-${Date.now()}`
+    const path = join(INBOX_DIR, `${Date.now()}-${name}`)
+    writeFileSync(path, buf)
+    return path
+  } catch (err) {
+    log('ERROR', `file download failed: ${String(err)}`)
+    return undefined
+  }
 }
 
 // ── CDN upload pipeline ──────────────────────────────────────────────────────
@@ -369,8 +437,6 @@ async function requestUploadUrl(params: {
   if (!resp.upload_param) throw new Error('getUploadUrl: no upload_param in response')
   return resp.upload_param
 }
-
-const CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
 
 async function uploadToCdn(params: {
   uploadParam: string
@@ -799,7 +865,7 @@ const mcp = new Server(
     instructions: [
       'The sender reads WeChat (Weixin), not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
       '',
-      'Messages from WeChat arrive as <channel source="weixin" user_id="..." message_id="..." user="..." ts="...">. Reply with the reply tool — pass user_id back. user_id is the WeChat ilink user ID (e.g. xxx@im.wechat).',
+      'Messages from WeChat arrive as <channel source="weixin" user_id="..." message_id="..." user="..." ts="...">. If the tag has an image_path attribute, Read that file — it is a photo the sender attached. If there is a file_path attribute, that is a file attachment. Reply with the reply tool — pass user_id back.',
       '',
       'reply accepts text and optional file attachments (files: ["/abs/path.png"]). Images display inline; other files as downloads. WeChat text limit is ~4000 chars; long replies are auto-chunked.',
       '',
@@ -1107,6 +1173,18 @@ async function processInbound(
 
   if (mediaType) {
     meta.media_type = mediaType
+  }
+
+  // Download inbound media (images, files) after gate approves
+  for (const item of msg.item_list ?? []) {
+    if (item.type === MessageItemType.IMAGE) {
+      const imagePath = await downloadInboundImage(item.image_item)
+      if (imagePath) meta.image_path = imagePath
+    }
+    if (item.type === MessageItemType.FILE) {
+      const filePath = await downloadInboundFile(item.file_item)
+      if (filePath) meta.file_path = filePath
+    }
   }
 
   // Voice-to-text annotation
