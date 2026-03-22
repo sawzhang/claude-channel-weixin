@@ -431,7 +431,7 @@ async function uploadFile(params: {
 
   return {
     downloadParam,
-    aesKeyBase64: aesKey.toString('base64'),
+    aesKeyBase64: Buffer.from(aesKeyHex).toString('base64'),
     ciphertextSize: encrypted.length,
     plaintextSize: rawSize,
     fileName: basename(params.filePath),
