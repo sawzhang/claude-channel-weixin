@@ -15,7 +15,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 - [Bun](https://bun.sh) 运行时：`curl -fsSL https://bun.sh/install | bash`
 - 微信 iOS 8.0.70+ 或 Android 对应版本，已启用 ClawBot 插件
 
-## 安装（2 步完成）
+## 安装
 
 ### 第 1 步：安装插件
 
@@ -26,7 +26,6 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 ```
 
 > 首次使用会提示添加 `sawzhang` marketplace，确认即可。
-> 插件自动安装依赖并注册 MCP server。
 
 ### 第 2 步：登录微信
 
@@ -34,14 +33,17 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 /weixin:configure
 ```
 
-按提示操作：
-1. 终端会显示一个二维码链接
-2. 用微信扫描二维码
-3. 在手机上确认连接
-4. 凭证自动保存
-5. 重启 Claude Code 即可使用
+按提示操作：扫描二维码 → 手机确认 → 凭证自动保存。
+
+### 第 3 步：启动 Claude Code
+
+```bash
+claude --dangerously-load-development-channels server:wechat
+```
 
 **完成！** 现在从微信发消息给 ClawBot，Claude 就会收到并回复。
+
+> **提示：** 使用 `--dangerously-load-development-channels server:wechat` 启动的 session 专门处理微信消息。其他普通 `claude` session 不会加载 WeChat channel，避免消息竞争。
 
 ## 访问控制
 
@@ -85,6 +87,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 | `account.json` | Bot 凭证（token, baseUrl, accountId） |
 | `access.json` | 访问控制（白名单、待配对） |
 | `sync_buf.json` | getUpdates 游标（重启后恢复） |
+| `poll.lock` | 轮询锁（防止多实例竞争） |
 | `logs/` | 日志文件 |
 
 ## 开发
