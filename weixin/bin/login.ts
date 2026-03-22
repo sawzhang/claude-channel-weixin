@@ -1,26 +1,27 @@
 #!/usr/bin/env bun
 /**
- * WeChat channel login script — QR code login flow.
- * Opens QR code in browser + renders in terminal, polls for confirmation, saves credentials.
- * Usage: bun bin/login.ts
+ * WeChat channel login script — two-phase QR code login.
+ *
+ * Phase 1: bun login.ts get-qr
+ *   → Fetches QR code, saves ASCII art to /tmp/weixin-qr.txt
+ *   → Outputs JSON: { qrcodeId, qrcodeContent, qrFile }
+ *
+ * Phase 2: bun login.ts poll <qrcodeId>
+ *   → Polls until confirmed/expired
+ *   → On confirmed: saves account.json + access.json
+ *   → Outputs JSON: { status, accountId?, userId?, error? }
  */
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { homedir, platform } from "node:os";
-import { execSync } from "node:child_process";
+import { homedir } from "node:os";
 import QRCode from "qrcode-terminal";
 
 const STATE_DIR = join(homedir(), ".claude", "channels", "weixin");
 const ACCOUNT_FILE = join(STATE_DIR, "account.json");
 const ACCESS_FILE = join(STATE_DIR, "access.json");
 const API_BASE = "https://ilinkai.weixin.qq.com";
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-function log(msg: string) {
-  console.log(`[weixin] ${msg}`);
-}
+const QR_FILE = "/tmp/weixin-qr.txt";
 
 async function apiFetch(path: string, opts?: RequestInit) {
   const url = `${API_BASE}${path}`;
@@ -29,71 +30,40 @@ async function apiFetch(path: string, opts?: RequestInit) {
   return res.json() as Promise<any>;
 }
 
-function openInBrowser(url: string) {
-  try {
-    const cmd = platform() === "darwin" ? "open" : platform() === "win32" ? "start" : "xdg-open";
-    execSync(`${cmd} "${url}"`, { stdio: "ignore" });
-  } catch {}
-}
-
-function renderQR(content: string): Promise<void> {
+function generateQRToString(content: string): Promise<string> {
   return new Promise((resolve) => {
     QRCode.generate(content, { small: true }, (qr: string) => {
-      console.log(qr);
-      resolve();
+      resolve(qr);
     });
   });
 }
 
-async function showQRCode(content: string) {
-  // 1. Open QR code image in browser (most reliable for scanning)
-  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(content)}`;
-  log("正在浏览器中打开二维码...");
-  openInBrowser(qrImageUrl);
+// ── Phase 1: get-qr ─────────────────────────────────────────────────
 
-  // 2. Also render in terminal as fallback
-  await renderQR(content);
-
-  // 3. Print the URL in case browser didn't open
-  log(`如果浏览器未打开，请访问: ${qrImageUrl}`);
-}
-
-// ── Main ─────────────────────────────────────────────────────────────
-
-async function main() {
-  // Check existing login
-  if (existsSync(ACCOUNT_FILE)) {
-    try {
-      const existing = JSON.parse(readFileSync(ACCOUNT_FILE, "utf-8"));
-      log(`已有登录凭证 (账号: ${existing.accountId})`);
-      log("重新登录将覆盖现有凭证...");
-    } catch {}
-  }
-
-  // Step 1: Get QR code
-  log("正在获取二维码...");
+async function getQR() {
   const qrRes = await apiFetch("/ilink/bot/get_bot_qrcode?bot_type=3");
 
   if (!qrRes.qrcode || !qrRes.qrcode_img_content) {
-    console.error("[weixin] 获取二维码失败:", JSON.stringify(qrRes));
+    console.log(JSON.stringify({ error: "获取二维码失败" }));
     process.exit(1);
   }
 
-  let qrcodeId = qrRes.qrcode;
-  const qrcodeContent = qrRes.qrcode_img_content;
+  const qrAscii = await generateQRToString(qrRes.qrcode_img_content);
+  writeFileSync(QR_FILE, qrAscii);
 
-  // Step 2: Show QR code (browser + terminal)
-  log("请使用微信扫描二维码:");
-  await showQRCode(qrcodeContent);
-  log("等待扫码... (5 分钟超时)");
+  console.log(JSON.stringify({
+    qrcodeId: qrRes.qrcode,
+    qrcodeContent: qrRes.qrcode_img_content,
+    qrFile: QR_FILE,
+  }));
+}
 
-  // Step 3: Poll for status
+// ── Phase 2: poll ────────────────────────────────────────────────────
+
+async function poll(qrcodeId: string) {
   const POLL_INTERVAL = 3000;
   const TIMEOUT = 5 * 60 * 1000;
-  const MAX_RETRIES = 3;
-  let retries = 0;
   const startTime = Date.now();
-  let scannedLogged = false;
 
   while (Date.now() - startTime < TIMEOUT) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL));
@@ -104,46 +74,27 @@ async function main() {
         `/ilink/bot/get_qrcode_status?qrcode=${qrcodeId}`,
         { headers: { "iLink-App-ClientVersion": "1" } }
       );
-    } catch (e) {
-      log(`轮询出错: ${e}`);
+    } catch (e: any) {
       continue;
     }
 
     const status = statusRes.status;
 
-    if (status === "wait") {
-      continue;
-    }
+    if (status === "wait") continue;
 
-    if (status === "scaned" && !scannedLogged) {
-      log("已扫码，请在手机上确认...");
-      scannedLogged = true;
+    if (status === "scaned") {
+      console.log(JSON.stringify({ status: "scaned" }));
       continue;
     }
 
     if (status === "expired") {
-      retries++;
-      if (retries >= MAX_RETRIES) {
-        log("二维码已过期且重试次数已用完，请重新运行。");
-        process.exit(1);
-      }
-      log(`二维码已过期，正在刷新 (${retries}/${MAX_RETRIES})...`);
-      const newQr = await apiFetch("/ilink/bot/get_bot_qrcode?bot_type=3");
-      if (!newQr.qrcode || !newQr.qrcode_img_content) {
-        log("刷新二维码失败");
-        process.exit(1);
-      }
-      qrcodeId = newQr.qrcode;
-      log("请重新扫描:");
-      await showQRCode(newQr.qrcode_img_content);
-      scannedLogged = false;
-      continue;
+      console.log(JSON.stringify({ status: "expired" }));
+      process.exit(0);
     }
 
     if (status === "confirmed") {
       const { bot_token, ilink_bot_id, baseurl, ilink_user_id } = statusRes;
 
-      // Step 4: Save credentials
       mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
 
       const account = {
@@ -156,32 +107,42 @@ async function main() {
       writeFileSync(ACCOUNT_FILE, JSON.stringify(account, null, 2));
       chmodSync(ACCOUNT_FILE, 0o600);
 
-      // Initialize access control
       const access = {
         dmPolicy: "pairing",
         allowFrom: [ilink_user_id],
         pending: {},
       };
-      writeFileSync(ACCESS_FILE, JSON.stringify(access, null, 2));
-      chmodSync(ACCESS_FILE, 0o600);
+      if (!existsSync(ACCESS_FILE)) {
+        writeFileSync(ACCESS_FILE, JSON.stringify(access, null, 2));
+        chmodSync(ACCESS_FILE, 0o600);
+      }
 
-      // Done!
-      log("连接成功！");
-      console.log();
-      console.log(`  账号 ID:   ${ilink_bot_id}`);
-      console.log(`  用户 ID:   ${ilink_user_id}`);
-      console.log(`  状态目录:  ${STATE_DIR}`);
-      console.log();
-      console.log("  下一步: 重启 Claude Code 以启动消息轮询");
+      console.log(JSON.stringify({
+        status: "confirmed",
+        accountId: ilink_bot_id,
+        userId: ilink_user_id,
+      }));
       process.exit(0);
     }
   }
 
-  log("超时未确认，请重新运行。");
+  console.log(JSON.stringify({ status: "timeout" }));
   process.exit(1);
 }
 
-main().catch((e) => {
-  console.error("[weixin] 登录失败:", e.message || e);
+// ── Entry ────────────────────────────────────────────────────────────
+
+const [cmd, ...args] = process.argv.slice(2);
+
+if (cmd === "get-qr") {
+  await getQR();
+} else if (cmd === "poll") {
+  if (!args[0]) {
+    console.log(JSON.stringify({ error: "Usage: login.ts poll <qrcodeId>" }));
+    process.exit(1);
+  }
+  await poll(args[0]);
+} else {
+  console.log(JSON.stringify({ error: "Usage: login.ts <get-qr|poll> [args]" }));
   process.exit(1);
-});
+}

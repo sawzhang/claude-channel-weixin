@@ -5,36 +5,72 @@ user-invocable: true
 allowed-tools:
   - Bash
   - Read
+  - Write
 ---
 
 # WeChat Channel Configuration
 
 You are configuring the WeChat (Weixin) channel plugin for Claude Code.
 
-## Login
+## Login Flow
 
-Run the login script. It handles everything: QR code rendering, polling, and credential saving.
+Follow these steps EXACTLY in order. Do NOT skip steps or combine them.
+
+### Step 1: Get QR code
 
 ```bash
-bun ${CLAUDE_SKILL_DIR}/../../bin/login.ts
+bun ${CLAUDE_SKILL_DIR}/../../bin/login.ts get-qr
 ```
 
-This script will:
-1. Render a QR code directly in the terminal
-2. Wait for the user to scan and confirm
-3. Save credentials to `~/.claude/channels/weixin/account.json`
-4. Initialize access control in `~/.claude/channels/weixin/access.json`
+This outputs JSON with `qrcodeId` and `qrFile`. Save the `qrcodeId` for step 3.
 
-After it completes, tell the user to restart Claude Code.
+### Step 2: Display QR code
+
+Read the QR code file with the Read tool:
+
+```
+Read /tmp/weixin-qr.txt
+```
+
+Then display the QR code contents directly in your text response inside a code block, like:
+
+````
+请使用微信扫描以下二维码:
+
+```
+<paste the exact contents of /tmp/weixin-qr.txt here>
+```
+
+扫描后请在手机上确认连接。
+````
+
+This is critical — the QR code MUST appear in your text response (not inside a Bash tool call) so the user can see and scan it without it being collapsed.
+
+### Step 3: Poll for confirmation
+
+Run the poll command with the `qrcodeId` from step 1. Set a 5-minute timeout:
+
+```bash
+bun ${CLAUDE_SKILL_DIR}/../../bin/login.ts poll <qrcodeId>
+```
+
+This command blocks until the user confirms, the QR expires, or timeout. It outputs JSON status lines.
+
+Interpret the final output:
+- `{"status":"confirmed","accountId":"...","userId":"..."}` → Success! Tell the user: "连接成功！请重启 Claude Code。"
+- `{"status":"expired"}` → QR expired. Go back to Step 1 to get a new QR code. Max 3 retries.
+- `{"status":"timeout"}` → Tell the user to re-run `/weixin:configure`.
+- `{"status":"scaned"}` → User scanned but hasn't confirmed yet. This is an intermediate status, the command continues polling.
+
+### Step 4: Confirm success
+
+After confirmed status, tell the user:
+- 连接成功
+- 账号 ID 和用户 ID (from the confirmed output)
+- 下一步: 重启 Claude Code 以启动消息轮询
 
 ## Status Check
 
-When the user asks about status instead of login:
+When the user asks about status (not login):
 - Read `~/.claude/channels/weixin/account.json` — show if logged in, account ID
-- Read `~/.claude/channels/weixin/access.json` — show DM policy, number of allowed users
-
-## Important
-
-- The script timeout is 5 minutes. If expired, the user can re-run `/weixin:configure`.
-- After login, the user MUST restart Claude Code so the MCP server picks up the new credentials.
-- WeChat requires iOS 8.0.70+ or Android equivalent with ClawBot plugin enabled.
+- Read `~/.claude/channels/weixin/access.json` — show DM policy, allowed users count
