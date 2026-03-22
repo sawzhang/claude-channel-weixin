@@ -16,7 +16,7 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { randomBytes } from 'crypto'
+import { randomBytes, createHash, createCipheriv } from 'crypto'
 import {
   readFileSync,
   writeFileSync,
@@ -26,9 +26,11 @@ import {
   rmSync,
   renameSync,
   appendFileSync,
+  realpathSync,
+  statSync,
 } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, extname, sep, basename } from 'path'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -40,15 +42,17 @@ const APPROVED_DIR = join(STATE_DIR, 'approved')
 const LOG_DIR = join(STATE_DIR, 'logs')
 
 const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
-const DEFAULT_BOT_TYPE = '3'
 const LONG_POLL_TIMEOUT_MS = 35_000
-const QR_POLL_TIMEOUT_MS = 35_000
 const MAX_CONSECUTIVE_FAILURES = 3
 const BACKOFF_DELAY_MS = 30_000
 const RETRY_DELAY_MS = 2_000
 const SESSION_EXPIRED_ERRCODE = -14
 const SESSION_PAUSE_MS = 60 * 60_000 // 1 hour — matches official OpenClaw plugin
 const MAX_TEXT_CHUNK = 4000
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024 // 50MB
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi'])
+const CDN_MEDIA_TYPE = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
 
 // ── Session guard ─────────────────────────────────────────────────────────────
 
@@ -311,52 +315,216 @@ async function getConfig(params: {
   }
 }
 
-// ── QR Login ──────────────────────────────────────────────────────────────────
+// ── AES-ECB encryption ────────────────────────────────────────────────────────
 
-interface QRCodeResponse {
-  qrcode: string
-  qrcode_img_content: string
+function aesEcbEncrypt(data: Buffer, key: Buffer): Buffer {
+  const cipher = createCipheriv('aes-128-ecb', key, null)
+  return Buffer.concat([cipher.update(data), cipher.final()])
 }
 
-interface QRStatusResponse {
-  status: 'wait' | 'scaned' | 'confirmed' | 'expired'
-  bot_token?: string
-  ilink_bot_id?: string
-  baseurl?: string
-  ilink_user_id?: string
+function aesEcbPaddedSize(rawSize: number): number {
+  return Math.ceil((rawSize + 1) / 16) * 16
 }
 
-async function fetchQRCode(baseUrl: string): Promise<QRCodeResponse> {
-  const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
-  const url = `${base}ilink/bot/get_bot_qrcode?bot_type=${DEFAULT_BOT_TYPE}`
-  const res = await fetch(url)
+// ── CDN upload pipeline ──────────────────────────────────────────────────────
+
+interface UploadedFile {
+  downloadParam: string
+  aesKeyBase64: string
+  ciphertextSize: number
+  plaintextSize: number
+  fileName: string
+}
+
+async function requestUploadUrl(params: {
+  baseUrl: string
+  token: string
+  filekey: string
+  mediaType: number
+  toUserId: string
+  rawSize: number
+  rawMd5: string
+  ciphertextSize: number
+  aesKeyHex: string
+}): Promise<string> {
+  const rawText = await apiFetch({
+    baseUrl: params.baseUrl,
+    endpoint: 'ilink/bot/getuploadurl',
+    body: JSON.stringify({
+      filekey: params.filekey,
+      media_type: params.mediaType,
+      to_user_id: params.toUserId,
+      rawsize: params.rawSize,
+      rawfilemd5: params.rawMd5,
+      filesize: params.ciphertextSize,
+      aeskey: params.aesKeyHex,
+      no_need_thumb: true,
+      base_info: buildBaseInfo(),
+    }),
+    token: params.token,
+    timeoutMs: 15_000,
+    label: 'getUploadUrl',
+  })
+  const resp = JSON.parse(rawText) as { upload_param?: string; cdn_base_url?: string }
+  if (!resp.upload_param) throw new Error('getUploadUrl: no upload_param in response')
+  return resp.upload_param
+}
+
+async function uploadToCdn(params: {
+  baseUrl: string
+  uploadParam: string
+  filekey: string
+  encryptedData: Buffer
+}): Promise<string> {
+  const base = params.baseUrl.endsWith('/') ? params.baseUrl : `${params.baseUrl}/`
+  const url = `${base}upload?encrypted_query_param=${encodeURIComponent(params.uploadParam)}&filekey=${params.filekey}`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: params.encryptedData,
+  })
+
   if (!res.ok) {
-    throw new Error(`QR code fetch failed: ${res.status} ${res.statusText}`)
+    throw new Error(`CDN upload failed: ${res.status}`)
   }
-  return (await res.json()) as QRCodeResponse
+
+  const downloadParam = res.headers.get('x-encrypted-param')
+  if (!downloadParam) throw new Error('CDN upload: no x-encrypted-param in response')
+  return downloadParam
 }
 
-async function pollQRStatus(baseUrl: string, qrcode: string): Promise<QRStatusResponse> {
-  const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
-  const url = `${base}ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcode)}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), QR_POLL_TIMEOUT_MS)
+async function uploadFile(params: {
+  baseUrl: string
+  token: string
+  filePath: string
+  toUserId: string
+  mediaType: number
+}): Promise<UploadedFile> {
+  const data = readFileSync(params.filePath)
+  const rawSize = data.length
+  const rawMd5 = createHash('md5').update(data).digest('hex')
+  const aesKey = randomBytes(16)
+  const aesKeyHex = aesKey.toString('hex')
+  const filekey = randomBytes(16).toString('hex')
+  const ciphertextSize = aesEcbPaddedSize(rawSize)
+
+  const uploadParam = await requestUploadUrl({
+    baseUrl: params.baseUrl,
+    token: params.token,
+    filekey,
+    mediaType: params.mediaType,
+    toUserId: params.toUserId,
+    rawSize,
+    rawMd5,
+    ciphertextSize,
+    aesKeyHex,
+  })
+
+  const encrypted = aesEcbEncrypt(data, aesKey)
+
+  const downloadParam = await uploadToCdn({
+    baseUrl: params.baseUrl,
+    uploadParam,
+    filekey,
+    encryptedData: encrypted,
+  })
+
+  return {
+    downloadParam,
+    aesKeyBase64: aesKey.toString('base64'),
+    ciphertextSize: encrypted.length,
+    plaintextSize: rawSize,
+    fileName: basename(params.filePath),
+  }
+}
+
+// ── Send media ───────────────────────────────────────────────────────────────
+
+function getCdnMediaType(filePath: string): number {
+  const ext = extname(filePath).toLowerCase()
+  if (IMAGE_EXTS.has(ext)) return CDN_MEDIA_TYPE.IMAGE
+  if (VIDEO_EXTS.has(ext)) return CDN_MEDIA_TYPE.VIDEO
+  return CDN_MEDIA_TYPE.FILE
+}
+
+async function sendMedia(params: {
+  baseUrl: string
+  token: string
+  to: string
+  filePath: string
+  contextToken: string
+}): Promise<string> {
+  const mediaType = getCdnMediaType(params.filePath)
+  const uploaded = await uploadFile({
+    baseUrl: params.baseUrl,
+    token: params.token,
+    filePath: params.filePath,
+    toUserId: params.to,
+    mediaType,
+  })
+
+  const cdnMedia = {
+    encrypt_query_param: uploaded.downloadParam,
+    aes_key: uploaded.aesKeyBase64,
+    encrypt_type: 1,
+  }
+
+  let itemList: MessageItem[]
+
+  if (mediaType === CDN_MEDIA_TYPE.IMAGE) {
+    itemList = [{
+      type: MessageItemType.IMAGE,
+      image_item: { media: cdnMedia, mid_size: uploaded.ciphertextSize },
+    }]
+  } else if (mediaType === CDN_MEDIA_TYPE.VIDEO) {
+    itemList = [{
+      type: MessageItemType.VIDEO,
+      video_item: { media: cdnMedia },
+    }]
+  } else {
+    itemList = [{
+      type: MessageItemType.FILE,
+      file_item: {
+        media: cdnMedia,
+        file_name: uploaded.fileName,
+      },
+    }]
+  }
+
+  const clientId = `weixin:${Date.now()}-${randomBytes(4).toString('hex')}`
+  await apiFetch({
+    baseUrl: params.baseUrl,
+    endpoint: 'ilink/bot/sendmessage',
+    body: JSON.stringify({
+      msg: {
+        from_user_id: '',
+        to_user_id: params.to,
+        client_id: clientId,
+        message_type: MessageType.BOT,
+        message_state: MessageState.FINISH,
+        item_list: itemList,
+        context_token: params.contextToken,
+      },
+      base_info: buildBaseInfo(),
+    }),
+    token: params.token,
+    timeoutMs: 30_000,
+    label: 'sendMedia',
+  })
+  return clientId
+}
+
+// ── File security ────────────────────────────────────────────────────────────
+
+function assertSendable(f: string): void {
+  let real: string, stateReal: string
   try {
-    const res = await fetch(url, {
-      headers: { 'iLink-App-ClientVersion': '1' },
-      signal: controller.signal,
-    })
-    clearTimeout(timer)
-    if (!res.ok) {
-      throw new Error(`QR status poll failed: ${res.status}`)
-    }
-    return (await res.json()) as QRStatusResponse
-  } catch (err) {
-    clearTimeout(timer)
-    if (err instanceof Error && err.name === 'AbortError') {
-      return { status: 'wait' }
-    }
-    throw err
+    real = realpathSync(f)
+    stateReal = realpathSync(STATE_DIR)
+  } catch { return }
+  if (real.startsWith(stateReal + sep)) {
+    throw new Error(`refusing to send channel state: ${f}`)
   }
 }
 
@@ -634,7 +802,7 @@ const mcp = new Server(
       '',
       'Messages from WeChat arrive as <channel source="weixin" user_id="..." message_id="..." user="..." ts="...">. Reply with the reply tool — pass user_id back. user_id is the WeChat ilink user ID (e.g. xxx@im.wechat).',
       '',
-      'reply accepts text only. WeChat text limit is ~4000 chars; long replies are auto-chunked.',
+      'reply accepts text and optional file attachments (files: ["/abs/path.png"]). Images display inline; other files as downloads. WeChat text limit is ~4000 chars; long replies are auto-chunked.',
       '',
       "WeChat's ilink Bot API exposes no history or search — you only see messages as they arrive. If you need earlier context, ask the user to paste it or summarize.",
       '',
@@ -650,7 +818,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reply',
       description:
-        'Reply on WeChat. Pass user_id from the inbound message. Text is converted from markdown to plain text automatically. Long messages are chunked.',
+        'Reply on WeChat. Pass user_id from the inbound message. Text is converted from markdown to plain text automatically. Long messages are chunked. Optionally attach files.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -659,6 +827,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: 'WeChat user ID from the inbound <channel> block (e.g. xxx@im.wechat)',
           },
           text: { type: 'string', description: 'Reply text (markdown OK — auto-converted to plain text)' },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Absolute file paths to attach. Images send as photos (inline preview); other types as file downloads. Max 50MB each.',
+          },
         },
         required: ['user_id', 'text'],
       },
@@ -673,6 +846,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'reply': {
         const userId = args.user_id as string
         const rawText = args.text as string
+        const files = (args.files as string[] | undefined) ?? []
 
         assertSessionActive()
         assertAllowedSender(userId)
@@ -689,10 +863,21 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           )
         }
 
+        // Validate files upfront
+        for (const f of files) {
+          assertSendable(f)
+          const st = statSync(f)
+          if (st.size > MAX_ATTACHMENT_BYTES) {
+            throw new Error(`file too large: ${f} (${(st.size / 1024 / 1024).toFixed(1)}MB, max 50MB)`)
+          }
+        }
+
+        const sentIds: string[] = []
+
+        // Send text chunks
         const plainText = markdownToPlainText(rawText)
         const limit = loadAccess().textChunkLimit ?? MAX_TEXT_CHUNK
         const chunks = chunk(plainText, limit)
-        const sentIds: string[] = []
 
         for (const chunkText of chunks) {
           const id = await sendMessage({
@@ -705,10 +890,30 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           sentIds.push(id)
         }
 
+        // Send files (each as a separate message)
+        for (const f of files) {
+          try {
+            const id = await sendMedia({
+              baseUrl: account.baseUrl,
+              token: account.token,
+              to: userId,
+              filePath: f,
+              contextToken,
+            })
+            sentIds.push(id)
+          } catch (err) {
+            const fileErr = err instanceof Error ? err.message : String(err)
+            log('ERROR', `file send failed for ${f}: ${fileErr}`)
+            throw new Error(
+              `reply sent ${sentIds.length} part(s) but file ${basename(f)} failed: ${fileErr}`,
+            )
+          }
+        }
+
         const result =
           sentIds.length === 1
             ? `sent (id: ${sentIds[0]})`
-            : `sent ${sentIds.length} parts`
+            : `sent ${sentIds.length} parts (${chunks.length} text + ${files.length} files)`
         return { content: [{ type: 'text', text: result }] }
       }
       default:
