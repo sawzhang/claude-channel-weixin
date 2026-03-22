@@ -22,7 +22,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 在 Claude Code 终端中运行：
 
 ```
-/plugin install weixin@alexzhang2015
+/plugin install weixin@sawzhang
 ```
 
 > 首次使用需要添加 marketplace。Claude Code 会自动提示确认。
