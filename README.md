@@ -38,7 +38,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 ### 第 3 步：启动 Claude Code
 
 ```bash
-claude --dangerously-load-development-channels server:weixin
+claude --dangerously-load-development-channels plugin:weixin@sawzhang
 ```
 
 **完成！** 现在从微信发消息给 ClawBot，Claude 就会收到并回复。
