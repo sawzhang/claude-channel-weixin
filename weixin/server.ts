@@ -370,14 +370,14 @@ async function requestUploadUrl(params: {
   return resp.upload_param
 }
 
+const CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
+
 async function uploadToCdn(params: {
-  baseUrl: string
   uploadParam: string
   filekey: string
   encryptedData: Buffer
 }): Promise<string> {
-  const base = params.baseUrl.endsWith('/') ? params.baseUrl : `${params.baseUrl}/`
-  const url = `${base}upload?encrypted_query_param=${encodeURIComponent(params.uploadParam)}&filekey=${params.filekey}`
+  const url = `${CDN_BASE_URL}/upload?encrypted_query_param=${encodeURIComponent(params.uploadParam)}&filekey=${encodeURIComponent(params.filekey)}`
 
   const res = await fetch(url, {
     method: 'POST',
@@ -424,7 +424,6 @@ async function uploadFile(params: {
   const encrypted = aesEcbEncrypt(data, aesKey)
 
   const downloadParam = await uploadToCdn({
-    baseUrl: params.baseUrl,
     uploadParam,
     filekey,
     encryptedData: encrypted,
