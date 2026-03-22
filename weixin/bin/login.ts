@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 /**
  * WeChat channel login script — QR code login flow.
- * Renders QR code in terminal, polls for confirmation, saves credentials.
+ * Opens QR code in browser + renders in terminal, polls for confirmation, saves credentials.
  * Usage: bun bin/login.ts
  */
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
+import { execSync } from "node:child_process";
 import QRCode from "qrcode-terminal";
 
 const STATE_DIR = join(homedir(), ".claude", "channels", "weixin");
@@ -28,14 +29,33 @@ async function apiFetch(path: string, opts?: RequestInit) {
   return res.json() as Promise<any>;
 }
 
+function openInBrowser(url: string) {
+  try {
+    const cmd = platform() === "darwin" ? "open" : platform() === "win32" ? "start" : "xdg-open";
+    execSync(`${cmd} "${url}"`, { stdio: "ignore" });
+  } catch {}
+}
+
 function renderQR(content: string): Promise<void> {
   return new Promise((resolve) => {
     QRCode.generate(content, { small: true }, (qr: string) => {
-      console.log();
       console.log(qr);
       resolve();
     });
   });
+}
+
+async function showQRCode(content: string) {
+  // 1. Open QR code image in browser (most reliable for scanning)
+  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(content)}`;
+  log("正在浏览器中打开二维码...");
+  openInBrowser(qrImageUrl);
+
+  // 2. Also render in terminal as fallback
+  await renderQR(content);
+
+  // 3. Print the URL in case browser didn't open
+  log(`如果浏览器未打开，请访问: ${qrImageUrl}`);
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -59,13 +79,13 @@ async function main() {
     process.exit(1);
   }
 
-  const qrcodeId = qrRes.qrcode;
+  let qrcodeId = qrRes.qrcode;
   const qrcodeContent = qrRes.qrcode_img_content;
 
-  // Step 2: Render QR code in terminal
-  log("请使用微信扫描以下二维码:");
-  await renderQR(qrcodeContent);
-  log("等待扫码...");
+  // Step 2: Show QR code (browser + terminal)
+  log("请使用微信扫描二维码:");
+  await showQRCode(qrcodeContent);
+  log("等待扫码... (5 分钟超时)");
 
   // Step 3: Poll for status
   const POLL_INTERVAL = 3000;
@@ -113,8 +133,9 @@ async function main() {
         log("刷新二维码失败");
         process.exit(1);
       }
+      qrcodeId = newQr.qrcode;
       log("请重新扫描:");
-      await renderQR(newQr.qrcode_img_content);
+      await showQRCode(newQr.qrcode_img_content);
       scannedLogged = false;
       continue;
     }
@@ -145,15 +166,13 @@ async function main() {
       chmodSync(ACCESS_FILE, 0o600);
 
       // Done!
-      console.log();
-      log("✅ 连接成功！");
+      log("连接成功！");
       console.log();
       console.log(`  账号 ID:   ${ilink_bot_id}`);
       console.log(`  用户 ID:   ${ilink_user_id}`);
       console.log(`  状态目录:  ${STATE_DIR}`);
       console.log();
       console.log("  下一步: 重启 Claude Code 以启动消息轮询");
-      console.log();
       process.exit(0);
     }
   }
