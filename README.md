@@ -7,7 +7,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 - 在微信中直接向 Claude 发消息，Claude 自动回复
 - 语音消息自动转文字
 - 引用消息包含上下文
-- 配对式访问控制，防止未授权访问
+- 登录即用，自动白名单
 
 ## 前置条件
 
@@ -44,22 +44,6 @@ claude --dangerously-skip-permissions --dangerously-load-development-channels pl
 **完成！** 现在从微信发消息给 ClawBot，Claude 就会收到并回复。
 
 > **提示：** 只有用上述命令启动的 session 会接收微信消息。其他普通 `claude` session 不受影响。`--channels` 仅限官方审批的 channel 使用，第三方插件需要用 `--dangerously-load-development-channels`。
-
-## 访问控制
-
-登录时你的微信 ID 自动加入白名单。默认策略是 `allowlist`——只有白名单用户可以发消息。
-
-管理命令：
-
-```
-/weixin:access list                # 查看当前访问状态
-/weixin:access add <user_id>       # 添加用户到白名单
-/weixin:access remove <user_id>    # 从白名单移除用户
-/weixin:access policy open         # 允许所有人（谨慎使用）
-/weixin:access policy allowlist    # 仅允许白名单用户（默认）
-/weixin:access policy pairing      # 新用户需要配对码确认
-/weixin:access policy disabled     # 关闭消息接收
-```
 
 ## 工作原理
 
