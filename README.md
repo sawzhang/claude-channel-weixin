@@ -68,7 +68,6 @@ claude --dangerously-skip-permissions --dangerously-load-development-channels pl
 | `account.json` | Bot 凭证（token, baseUrl, accountId） |
 | `access.json` | 访问控制（白名单、待配对） |
 | `sync_buf.json` | getUpdates 游标（重启后恢复） |
-| `poll.lock` | 轮询锁（防止多实例竞争） |
 | `logs/` | 日志文件 |
 
 ## 开发

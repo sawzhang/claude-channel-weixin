@@ -728,57 +728,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
 await mcp.connect(new StdioServerTransport())
 
-// ── Poll lock ─────────────────────────────────────────────────────────────────
-// Only one MCP server instance should poll getupdates at a time.
-// The first instance acquires the lock; others skip polling but still serve tools.
-
-const LOCK_FILE = join(STATE_DIR, 'poll.lock')
-let lockAcquired = false
-
-function tryAcquirePollLock(): boolean {
-  try {
-    const pid = process.pid.toString()
-    // Check if an existing lock is held by a live process
-    if (existsSync(LOCK_FILE)) {
-      try {
-        const existingPid = parseInt(readFileSync(LOCK_FILE, 'utf-8').trim(), 10)
-        if (existingPid && existingPid !== process.pid) {
-          // Check if the process is still alive
-          try {
-            process.kill(existingPid, 0) // signal 0 = check existence
-            return false // process is alive, lock is valid
-          } catch {
-            // process is dead, stale lock — take over
-          }
-        }
-      } catch {
-        // corrupt lock file, take over
-      }
-    }
-    writeFileSync(LOCK_FILE, pid)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function releasePollLock(): void {
-  try {
-    if (existsSync(LOCK_FILE)) {
-      const content = readFileSync(LOCK_FILE, 'utf-8').trim()
-      if (content === process.pid.toString()) {
-        rmSync(LOCK_FILE, { force: true })
-      }
-    }
-  } catch {}
-}
-
-// Clean up lock on exit
-process.on('exit', releasePollLock)
-process.on('SIGINT', () => { releasePollLock(); process.exit(0) })
-process.on('SIGTERM', () => { releasePollLock(); process.exit(0) })
-
 // ── Startup ───────────────────────────────────────────────────────────────────
+// Every instance polls getupdates. The ilink API's long-poll is naturally
+// exclusive — only one poll receives each message. No lock needed.
 
 const account = loadAccount()
 if (!account?.token) {
@@ -789,18 +741,10 @@ if (!account?.token) {
   )
   // Stay running — tools still work, login can happen via skill
 } else {
-  lockAcquired = tryAcquirePollLock()
-  if (lockAcquired) {
-    process.stderr.write(
-      `weixin channel: logged in (account: ${account.accountId ?? 'unknown'}), polling active\n`,
-    )
-    startMonitor(account)
-  } else {
-    process.stderr.write(
-      `weixin channel: logged in (account: ${account.accountId ?? 'unknown'}), polling skipped (another instance is active)\n`,
-    )
-    // reply tool still works if context_token is available
-  }
+  process.stderr.write(
+    `weixin channel: logged in (account: ${account.accountId ?? 'unknown'}), polling\n`,
+  )
+  startMonitor(account)
 }
 
 // ── Monitor loop ──────────────────────────────────────────────────────────────
