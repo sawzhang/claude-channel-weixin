@@ -47,20 +47,17 @@ claude --dangerously-load-development-channels server:weixin
 
 ## 访问控制
 
-首次有人通过微信发消息时，会收到一个 6 位配对码。在 Claude Code 中批准：
+登录时你的微信 ID 自动加入白名单。默认策略是 `allowlist`——只有白名单用户可以发消息。
 
-```
-/weixin:access pair <配对码>
-```
-
-其他访问管理命令：
+管理命令：
 
 ```
 /weixin:access list                # 查看当前访问状态
-/weixin:access add <user_id>       # 手动添加用户
-/weixin:access remove <user_id>    # 移除用户
+/weixin:access add <user_id>       # 添加用户到白名单
+/weixin:access remove <user_id>    # 从白名单移除用户
 /weixin:access policy open         # 允许所有人（谨慎使用）
-/weixin:access policy allowlist    # 仅允许白名单用户
+/weixin:access policy allowlist    # 仅允许白名单用户（默认）
+/weixin:access policy pairing      # 新用户需要配对码确认
 /weixin:access policy disabled     # 关闭消息接收
 ```
 

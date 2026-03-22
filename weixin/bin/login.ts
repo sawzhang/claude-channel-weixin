@@ -108,7 +108,7 @@ async function poll(qrcodeId: string) {
       chmodSync(ACCOUNT_FILE, 0o600);
 
       const access = {
-        dmPolicy: "pairing",
+        dmPolicy: "allowlist",
         allowFrom: [ilink_user_id],
         pending: {},
       };

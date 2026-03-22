@@ -397,7 +397,7 @@ type Access = {
 }
 
 function defaultAccess(): Access {
-  return { dmPolicy: 'pairing', allowFrom: [], pending: {} }
+  return { dmPolicy: 'allowlist', allowFrom: [], pending: {} }
 }
 
 function readAccessFile(): Access {
@@ -405,7 +405,7 @@ function readAccessFile(): Access {
     const raw = readFileSync(ACCESS_FILE, 'utf8')
     const parsed = JSON.parse(raw) as Partial<Access>
     return {
-      dmPolicy: parsed.dmPolicy ?? 'pairing',
+      dmPolicy: parsed.dmPolicy ?? 'allowlist',
       allowFrom: parsed.allowFrom ?? [],
       pending: parsed.pending ?? {},
       ackReaction: parsed.ackReaction,
