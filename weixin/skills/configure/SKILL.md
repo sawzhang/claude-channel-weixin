@@ -1,7 +1,7 @@
 ---
 name: configure
 description: "Set up the WeChat channel — run QR code login and review access policy. Use when the user asks to configure WeChat, log in to WeChat, or set up the channel."
-user_invocable: true
+user-invocable: true
 ---
 
 # WeChat Channel Configuration
