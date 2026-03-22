@@ -47,7 +47,31 @@ const MAX_CONSECUTIVE_FAILURES = 3
 const BACKOFF_DELAY_MS = 30_000
 const RETRY_DELAY_MS = 2_000
 const SESSION_EXPIRED_ERRCODE = -14
+const SESSION_PAUSE_MS = 60 * 60_000 // 1 hour — matches official OpenClaw plugin
 const MAX_TEXT_CHUNK = 4000
+
+// ── Session guard ─────────────────────────────────────────────────────────────
+
+let sessionPausedUntil = 0
+
+function pauseSession(): void {
+  sessionPausedUntil = Date.now() + SESSION_PAUSE_MS
+}
+
+function isSessionPaused(): boolean {
+  return Date.now() < sessionPausedUntil
+}
+
+function getRemainingPauseMs(): number {
+  return Math.max(0, sessionPausedUntil - Date.now())
+}
+
+function assertSessionActive(): void {
+  if (isSessionPaused()) {
+    const mins = Math.ceil(getRemainingPauseMs() / 60_000)
+    throw new Error(`Session paused (${mins} min remaining). Re-login with /weixin:configure if needed.`)
+  }
+}
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -650,6 +674,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const userId = args.user_id as string
         const rawText = args.text as string
 
+        assertSessionActive()
         assertAllowedSender(userId)
 
         const account = loadAccount()
@@ -756,8 +781,10 @@ function startMonitor(account: AccountData): void {
             resp.errcode === SESSION_EXPIRED_ERRCODE || resp.ret === SESSION_EXPIRED_ERRCODE
 
           if (isSessionExpired) {
-            log('ERROR', `session expired (errcode ${SESSION_EXPIRED_ERRCODE}), pausing 5 min`)
-            await sleep(5 * 60_000)
+            pauseSession()
+            const pauseMins = Math.ceil(getRemainingPauseMs() / 60_000)
+            log('ERROR', `session expired (errcode ${SESSION_EXPIRED_ERRCODE}), pausing ${pauseMins} min`)
+            await sleep(getRemainingPauseMs())
             continue
           }
 
