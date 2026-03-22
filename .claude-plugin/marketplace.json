@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "sawzhang",
+  "description": "WeChat (微信) channel plugin for Claude Code",
+  "owner": {
+    "name": "sawzhang"
+  },
+  "plugins": [
+    {
+      "name": "weixin",
+      "description": "WeChat (Weixin) channel for Claude Code — chat with Claude from your WeChat",
+      "source": "./weixin",
+      "category": "channels"
+    }
+  ]
+}
