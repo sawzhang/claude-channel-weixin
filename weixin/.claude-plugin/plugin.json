@@ -2,5 +2,6 @@
   "name": "weixin",
   "version": "0.0.1",
   "description": "WeChat (Weixin) channel for Claude Code — chat with Claude from your WeChat",
-  "channels": ["weixin"]
+  "channels": ["weixin"],
+  "skills": "./skills/"
 }
