@@ -15,7 +15,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 - [Bun](https://bun.sh) 运行时：`curl -fsSL https://bun.sh/install | bash`
 - 微信 iOS 8.0.70+ 或 Android 对应版本，已启用 ClawBot 插件
 
-## 安装（3 步完成）
+## 安装（2 步完成）
 
 ### 第 1 步：安装插件
 
@@ -25,7 +25,8 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 /plugin install weixin@sawzhang
 ```
 
-> 首次使用需要添加 marketplace。Claude Code 会自动提示确认。
+> 首次使用会提示添加 `sawzhang` marketplace，确认即可。
+> 插件自动安装依赖并注册 MCP server。
 
 ### 第 2 步：登录微信
 
@@ -38,13 +39,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 2. 用微信扫描二维码
 3. 在手机上确认连接
 4. 凭证自动保存
-
-### 第 3 步：重启 Claude Code
-
-```bash
-# 退出当前会话，重新启动
-claude
-```
+5. 重启 Claude Code 即可使用
 
 **完成！** 现在从微信发消息给 ClawBot，Claude 就会收到并回复。
 
@@ -95,6 +90,8 @@ claude
 ## 开发
 
 ```bash
+cd weixin/
+
 # 安装依赖
 bun install
 
