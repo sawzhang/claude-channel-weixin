@@ -38,12 +38,12 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 ### 第 3 步：启动 Claude Code
 
 ```bash
-claude --dangerously-load-development-channels plugin:weixin@sawzhang
+claude --dangerously-skip-permissions --channels plugin:weixin@sawzhang
 ```
 
 **完成！** 现在从微信发消息给 ClawBot，Claude 就会收到并回复。
 
-> **提示：** 只有用上述命令启动的 session 会加载 WeChat channel 并接收微信消息。其他普通 `claude` session 不受影响。
+> **提示：** 只有用 `--channels` 启动的 session 会接收微信消息。其他普通 `claude` session 不受影响。
 
 ## 访问控制
 
