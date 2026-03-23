@@ -17,17 +17,25 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 
 ## 安装
 
-### 第 1 步：安装插件
+### 第 1 步：添加 Marketplace
 
 在 Claude Code 终端中运行：
+
+```
+/plugin marketplace add sawzhang/claude-channel-weixin
+```
+
+也支持完整 URL：`/plugin marketplace add https://github.com/sawzhang/claude-channel-weixin`
+
+### 第 2 步：安装插件
 
 ```
 /plugin install weixin@sawzhang
 ```
 
-> 首次使用会提示添加 `sawzhang` marketplace，确认即可。
+### 第 3 步：登录微信
 
-### 第 2 步：登录微信
+直接告诉 Claude "帮我配置微信" 或 "登录微信"，Claude 会自动识别意图并调用配置流程。也可以手动输入：
 
 ```
 /weixin:configure
@@ -35,7 +43,7 @@ WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
 
 按提示操作：扫描二维码 → 手机确认 → 凭证自动保存。
 
-### 第 3 步：启动 Claude Code
+### 第 4 步：启动 Claude Code
 
 ```bash
 claude --dangerously-skip-permissions --dangerously-load-development-channels plugin:weixin@sawzhang
