@@ -1,96 +1,119 @@
 # claude-channel-weixin
 
-WeChat (微信) channel for Claude Code — 在微信里和 Claude 对话。
+**Turn WeChat into a Claude Code interface — chat with your AI agent from the app you already use every day.**
 
-## 功能
+> 把微信变成 Claude Code 的入口 — 在你每天都用的 App 里和 AI 助手对话。
 
-- 在微信中直接向 Claude 发消息，Claude 自动回复
-- 语音消息自动转文字
-- 引用消息包含上下文
-- 登录即用，自动白名单
+[![License](https://img.shields.io/badge/license-MIT-green)]()
+[![TypeScript](https://img.shields.io/badge/TypeScript-Bun-blue)]()
 
-## 前置条件
+## Why This Exists
 
-- [Claude Code](https://claude.ai/code) 已安装
-- [Bun](https://bun.sh) 运行时：`curl -fsSL https://bun.sh/install | bash`
-- 微信 iOS 8.0.70+ 或 Android 对应版本，已启用 ClawBot 插件
+Claude Code is powerful, but it lives in a terminal. Your team, your family, your life lives in **WeChat** — the app with 1.3 billion monthly users. This plugin bridges the two: send a message in WeChat, get a response from Claude.
 
-## 安装
+No app switching. No terminal. Just chat.
 
-### 第 1 步：添加 Marketplace
+## What You Get
 
-在 Claude Code 终端中运行：
+- **Chat with Claude in WeChat** — Send text, get intelligent responses powered by Claude Code
+- **Voice message support** — Voice messages auto-transcribed to text
+- **Quoted context** — Reply to a message and Claude sees the full context
+- **Zero config access** — Login once, auto-allowlisted, done
+- **Full Claude Code power** — Not a wrapper. Your WeChat messages go through the real Claude Code agent with all its tools
+
+## How It Works
+
+```
+WeChat App ←→ ilink API ←→ [This Plugin] ←→ Claude Code (MCP stdio)
+                                  ↑
+                            long-poll for messages
+                            sendMessage for replies
+```
+
+1. Plugin long-polls `ilink/bot/getupdates` for new WeChat messages
+2. Messages are pushed to Claude Code as `notifications/claude/channel` events
+3. Claude sees `<channel source="weixin" ...>` and processes the message
+4. Claude replies via the `reply` tool → `ilink/bot/sendmessage` → WeChat
+
+## Quick Start
+
+### Prerequisites
+
+- [Claude Code](https://claude.ai/code) installed
+- [Bun](https://bun.sh) runtime: `curl -fsSL https://bun.sh/install | bash`
+- WeChat iOS 8.0.70+ or Android equivalent, with ClawBot plugin enabled
+
+### Step 1: Add Marketplace
 
 ```
 /plugin marketplace add sawzhang/claude-channel-weixin
 ```
 
-也支持完整 URL：`/plugin marketplace add https://github.com/sawzhang/claude-channel-weixin`
-
-### 第 2 步：安装插件
+### Step 2: Install Plugin
 
 ```
 /plugin install weixin@sawzhang
 ```
 
-### 第 3 步：登录微信
+### Step 3: Login to WeChat
 
-直接告诉 Claude "帮我配置微信" 或 "登录微信"，Claude 会自动识别意图并调用配置流程。也可以手动输入：
+Tell Claude "帮我配置微信" or "login to WeChat" — it will handle the rest. Or manually:
 
 ```
 /weixin:configure
 ```
 
-按提示操作：扫描二维码 → 手机确认 → 凭证自动保存。
+Scan QR code → Confirm on phone → Credentials auto-saved.
 
-### 第 4 步：启动 Claude Code
+### Step 4: Launch Claude Code
 
 ```bash
 claude --dangerously-skip-permissions --dangerously-load-development-channels plugin:weixin@sawzhang
 ```
 
-**完成！** 现在从微信发消息给 ClawBot，Claude 就会收到并回复。
+**Done.** Send a message to ClawBot in WeChat and Claude will respond.
 
-> **提示：** 只有用上述命令启动的 session 会接收微信消息。其他普通 `claude` session 不受影响。`--channels` 仅限官方审批的 channel 使用，第三方插件需要用 `--dangerously-load-development-channels`。
+> **Note:** Only sessions launched with the command above receive WeChat messages. Regular `claude` sessions are unaffected.
 
-## 工作原理
+## State Files
 
-```
-微信 App ←→ ilink API ←→ [本插件] ←→ Claude Code (MCP stdio)
-                              ↑
-                        long-poll 轮询消息
-                        sendMessage 发送回复
-```
+All state is stored in `~/.claude/channels/weixin/`:
 
-1. 插件通过 `ilink/bot/getupdates` 长轮询获取新消息
-2. 消息作为 `notifications/claude/channel` 事件推送给 Claude Code
-3. Claude 看到 `<channel source="weixin" user_id="..." ...>` 标签
-4. Claude 通过 `reply` 工具调用 `ilink/bot/sendmessage` 回复
+| File | Purpose |
+|------|---------|
+| `account.json` | Bot credentials (token, baseUrl, accountId) |
+| `access.json` | Access control (allowlist, pending pairings) |
+| `sync_buf.json` | getUpdates cursor (survives restarts) |
+| `logs/` | Log files |
 
-## 状态文件
-
-所有状态保存在 `~/.claude/channels/weixin/`：
-
-| 文件 | 用途 |
-|------|------|
-| `account.json` | Bot 凭证（token, baseUrl, accountId） |
-| `access.json` | 访问控制（白名单、待配对） |
-| `sync_buf.json` | getUpdates 游标（重启后恢复） |
-| `logs/` | 日志文件 |
-
-## 开发
+## Development
 
 ```bash
 cd weixin/
 
-# 安装依赖
+# Install dependencies
 bun install
 
-# 类型检查
+# Type check
 bun build --no-bundle server.ts
 
-# 直接运行 MCP server
+# Run MCP server directly
 bun server.ts
+```
+
+## Project Structure
+
+```
+claude-channel-weixin/
+├── .claude-plugin/        # Plugin manifest for Claude Code marketplace
+├── weixin/
+│   ├── server.ts          # MCP server entry point
+│   ├── bin/               # CLI utilities (login, QR code)
+│   ├── skills/            # Plugin skills (configure, access)
+│   ├── package.json
+│   └── .mcp.json          # MCP server config
+├── CLAUDE.md
+└── README.md
 ```
 
 ## License
